@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { streamSSE } from 'hono/streaming'
+import { streamSSE, stream } from 'hono/streaming'
 import { v4 as uuidv4 } from 'uuid'
 
 type Bindings = {
@@ -115,8 +115,8 @@ app.post('/api/chat', async (c) => {
             const decoder = new TextDecoder()
 
 
-            // Redoing streaming for Ollama (NDJSON) using c.stream
-            return c.stream(async (stream) => {
+            // Redoing streaming for Ollama (NDJSON) using Hono's stream helper
+            return stream(c, async (stream) => {
                 // @ts-ignore
                 for await (const chunk of response) {
                     const text = decoder.decode(chunk, { stream: true })
