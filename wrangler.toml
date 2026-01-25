@@ -1,0 +1,5 @@
+name = "clawdbot-cf-ai"
+compatibility_date = "2024-04-05"
+
+[ai]
+binding = "AI"
