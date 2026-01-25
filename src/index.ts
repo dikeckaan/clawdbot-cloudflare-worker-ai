@@ -18,10 +18,19 @@ app.use('*', async (c, next) => {
     // Let's protect /v1 and /api routes.
     if (c.req.path.startsWith('/v1') || c.req.path.startsWith('/api')) {
         const authHeader = c.req.header('Authorization')
+        // Allow passing token via query param for easier usage (e.g. in URL)
+        const queryToken = c.req.query('token') || c.req.query('key')
         const expectedToken = c.env.API_TOKEN
 
         if (expectedToken) {
-            if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.split(' ')[1] !== expectedToken) {
+            let receivedToken = ''
+            if (authHeader && authHeader.startsWith('Bearer ')) {
+                receivedToken = authHeader.split(' ')[1]
+            } else if (queryToken) {
+                receivedToken = queryToken
+            }
+
+            if (receivedToken !== expectedToken) {
                 return c.json({ error: { message: 'Invalid API Key', type: 'invalid_request_error', param: null, code: 'invalid_api_key' } }, 401)
             }
         }
