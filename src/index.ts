@@ -57,9 +57,24 @@ app.get('/v1/models', (c) => {
 app.post('/v1/chat/completions', async (c) => {
     try {
         const body = await c.req.json()
-        const messages = body.messages || []
+        let messages = body.messages || []
         const model = body.model === 'llama-3-8b-instruct' ? DEFAULT_MODEL : (body.model || DEFAULT_MODEL)
         const stream = body.stream || false
+
+        // Sanitize messages: Cloudflare AI models (Llama etc) typically expect content to be a string, 
+        // but OpenAI clients (like Clawd) might send an array of content parts (e.g. for vision).
+        // We need to flatten it to a single string.
+        messages = messages.map((msg: any) => {
+            if (Array.isArray(msg.content)) {
+                // Extract text parts and join them
+                const textContent = msg.content
+                    .filter((part: any) => part.type === 'text')
+                    .map((part: any) => part.text)
+                    .join('\n')
+                return { ...msg, content: textContent }
+            }
+            return msg
+        })
 
         // Cloudflare Workers AI inputs
         const inputs = {
