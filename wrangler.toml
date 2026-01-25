@@ -1,5 +1,6 @@
 name = "clawdbot-cf-ai"
 compatibility_date = "2024-04-05"
+main = "src/index.ts"
 
 [ai]
 binding = "AI"
