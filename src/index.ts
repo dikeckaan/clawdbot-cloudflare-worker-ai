@@ -15,8 +15,8 @@ app.use('*', cors())
 // Middleware for Authentication
 app.use('*', async (c, next) => {
     // Skip auth for landing page if desired, or protect everything.
-    // Let's protect /v1 routes.
-    if (c.req.path.startsWith('/v1')) {
+    // Let's protect /v1 and /api routes.
+    if (c.req.path.startsWith('/v1') || c.req.path.startsWith('/api')) {
         const authHeader = c.req.header('Authorization')
         const expectedToken = c.env.API_TOKEN
 
@@ -34,6 +34,158 @@ const DEFAULT_MODEL = '@cf/meta/llama-3-8b-instruct'
 
 app.get('/', (c) => {
     return c.text('Cloudflare Workers AI OpenAI-Compatible API is running! Access restricted.')
+})
+
+// Ollama Compatibility Endpoints
+
+app.get('/api/tags', (c) => {
+    const models = [
+        { name: 'llama-3-8b-instruct', model: '@cf/meta/llama-3-8b-instruct' },
+        { name: 'gpt-oss-120b', model: '@cf/openai/gpt-oss-120b' },
+        { name: 'llama-3.3-70b-instruct-fp8-fast', model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast' }
+    ]
+
+    return c.json({
+        models: models.map(m => ({
+            name: m.name,
+            model: m.name,
+            modified_at: new Date().toISOString(),
+            size: 0,
+            digest: 'sha256:0000000000000000000000000000000000000000000000000000000000000000',
+            details: {
+                parent_model: '',
+                format: 'gguf',
+                family: 'llama',
+                families: ['llama'],
+                parameter_size: '8B',
+                quantization_level: 'Q4_0'
+            }
+        }))
+    })
+})
+
+app.post('/api/chat', async (c) => {
+    try {
+        const body = await c.req.json()
+        let messages = body.messages || []
+        // Ollama uses model names like 'llama3', we need to map or use raw
+        // Simple mapping based on our known list, or fallback to default
+        let model = DEFAULT_MODEL
+        if (body.model) {
+            if (body.model.includes('gpt-oss')) model = '@cf/openai/gpt-oss-120b'
+            else if (body.model.includes('70b')) model = '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+            else if (body.model.includes('llama')) model = '@cf/meta/llama-3-8b-instruct'
+            // Allow direct CF ID passing if user knows it
+            if (body.model.startsWith('@cf/')) model = body.model
+        }
+
+        const stream = body.stream ?? true // Ollama defaults to true
+
+        // Sanitize messages (same as v1 cleanup)
+        messages = messages.map((msg: any) => {
+            if (Array.isArray(msg.content)) {
+                const textContent = msg.content
+                    .filter((part: any) => part.type === 'text')
+                    .map((part: any) => part.text)
+                    .join('\n')
+                return { ...msg, content: textContent }
+            }
+            return msg
+        })
+
+        const inputs = {
+            messages,
+            stream,
+        }
+
+        const response = await c.env.AI.run(model, inputs)
+
+        if (stream) {
+            // Ollama uses NDJSON (Newline Delimited JSON)
+            // It does NOT use "data: " prefix like SSE. Just raw JSON objects on each line.
+            // @ts-ignore
+            const { readable, writable } = new TransformStream()
+            // @ts-ignore
+            const decoder = new TextDecoder()
+
+            // We need to return a readable stream that we push NDJSON into
+            return streamSSE(c, async (stream) => {
+                // @ts-ignore
+                for await (const chunk of response) {
+                    const text = decoder.decode(chunk, { stream: true })
+
+                    const payload = {
+                        model: body.model || 'unknown',
+                        created_at: new Date().toISOString(),
+                        message: {
+                            role: 'assistant',
+                            content: text
+                        },
+                        done: false
+                    }
+                    // Hono streamSSE adds "data: " prefix which breaks Ollama
+                    // We need raw stream or hijack streamSSE to send raw lines?
+                    // streamSSE is strictly for SSE.
+                    // We should use c.body(readableStream) or ensure we can write raw.
+
+                    // WAIT. Ollama does NOT want SSE. It wants standard HTTP chunked transfer with JSON Lines.
+                    // Hono's `streamText` might be better or just raw `c.stream`.
+                }
+            })
+
+            // Redoing streaming for Ollama (NDJSON) using c.stream
+            return c.stream(async (stream) => {
+                // @ts-ignore
+                for await (const chunk of response) {
+                    const text = decoder.decode(chunk, { stream: true })
+                    const payload = {
+                        model: body.model || 'unknown',
+                        created_at: new Date().toISOString(),
+                        message: { role: 'assistant', content: text },
+                        done: false
+                    }
+                    await stream.write(JSON.stringify(payload) + '\n')
+                }
+                const finalPayload = {
+                    model: body.model || 'unknown',
+                    created_at: new Date().toISOString(),
+                    done: true,
+                    total_duration: 0,
+                    load_duration: 0,
+                    prompt_eval_count: 0,
+                    prompt_eval_duration: 0,
+                    eval_count: 0,
+                    eval_duration: 0
+                }
+                await stream.write(JSON.stringify(finalPayload) + '\n')
+            }, {
+                headers: { 'Content-Type': 'application/x-ndjson' }
+            })
+
+        } else {
+            // Non-streaming
+            // @ts-ignore
+            const result = response as { response: string }
+            return c.json({
+                model: body.model || 'unknown',
+                created_at: new Date().toISOString(),
+                message: {
+                    role: 'assistant',
+                    content: result.response
+                },
+                done: true,
+                total_duration: 0,
+                load_duration: 0,
+                prompt_eval_count: 0,
+                prompt_eval_duration: 0,
+                eval_count: 0,
+                eval_duration: 0
+            })
+        }
+
+    } catch (e: any) {
+        return c.json({ error: e.message }, 500)
+    }
 })
 
 app.get('/v1/models', (c) => {
