@@ -111,36 +111,9 @@ app.post('/api/chat', async (c) => {
 
         if (stream) {
             // Ollama uses NDJSON (Newline Delimited JSON)
-            // It does NOT use "data: " prefix like SSE. Just raw JSON objects on each line.
-            // @ts-ignore
-            const { readable, writable } = new TransformStream()
             // @ts-ignore
             const decoder = new TextDecoder()
 
-            // We need to return a readable stream that we push NDJSON into
-            return streamSSE(c, async (stream) => {
-                // @ts-ignore
-                for await (const chunk of response) {
-                    const text = decoder.decode(chunk, { stream: true })
-
-                    const payload = {
-                        model: body.model || 'unknown',
-                        created_at: new Date().toISOString(),
-                        message: {
-                            role: 'assistant',
-                            content: text
-                        },
-                        done: false
-                    }
-                    // Hono streamSSE adds "data: " prefix which breaks Ollama
-                    // We need raw stream or hijack streamSSE to send raw lines?
-                    // streamSSE is strictly for SSE.
-                    // We should use c.body(readableStream) or ensure we can write raw.
-
-                    // WAIT. Ollama does NOT want SSE. It wants standard HTTP chunked transfer with JSON Lines.
-                    // Hono's `streamText` might be better or just raw `c.stream`.
-                }
-            })
 
             // Redoing streaming for Ollama (NDJSON) using c.stream
             return c.stream(async (stream) => {
