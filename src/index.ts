@@ -5,36 +5,52 @@ import { v4 as uuidv4 } from 'uuid'
 
 type Bindings = {
     AI: any
+    API_TOKEN?: string
 }
 
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('*', cors())
 
+// Middleware for Authentication
+app.use('*', async (c, next) => {
+    // Skip auth for landing page if desired, or protect everything.
+    // Let's protect /v1 routes.
+    if (c.req.path.startsWith('/v1')) {
+        const authHeader = c.req.header('Authorization')
+        const expectedToken = c.env.API_TOKEN
+
+        if (expectedToken) {
+            if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.split(' ')[1] !== expectedToken) {
+                return c.json({ error: { message: 'Invalid API Key', type: 'invalid_request_error', param: null, code: 'invalid_api_key' } }, 401)
+            }
+        }
+    }
+    await next()
+})
+
 // Default model to use if not specified or if mapping is needed
 const DEFAULT_MODEL = '@cf/meta/llama-3-8b-instruct'
 
 app.get('/', (c) => {
-    return c.text('Cloudflare Workers AI OpenAI-Compatible API is running!')
+    return c.text('Cloudflare Workers AI OpenAI-Compatible API is running! Access restricted.')
 })
 
 app.get('/v1/models', (c) => {
+    const models = [
+        { id: '@cf/meta/llama-3-8b-instruct', name: 'Llama 3 8B Instruct' },
+        { id: '@cf/openai/gpt-oss-120b', name: 'GPT OSS 120B' }, // Note: Verify availability in CF AI
+        { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 70B Instruct FP8 Fast' }
+    ]
+
     return c.json({
         object: 'list',
-        data: [
-            {
-                id: 'llama-3-8b-instruct',
-                object: 'model',
-                created: 1699000000,
-                owned_by: 'cloudflare',
-            },
-            {
-                id: '@cf/meta/llama-3-8b-instruct',
-                object: 'model',
-                created: 1699000000,
-                owned_by: 'cloudflare',
-            }
-        ],
+        data: models.map(m => ({
+            id: m.id,
+            object: 'model',
+            created: 1699000000,
+            owned_by: 'cloudflare',
+        })),
     })
 })
 
