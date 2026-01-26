@@ -228,8 +228,9 @@ app.post('/v1/chat/completions', async (c) => {
                 // @ts-ignore
                 for await (const chunk of response) {
                     // chunk is usually Uint8Array or string.
-                    // For Llama models, it is often a Bytes chunk of the string token.
                     const text = decoder.decode(chunk, { stream: true })
+
+                    // console.log('Chunk:', text) // Uncomment to debug via `npx wrangler tail`
 
                     const payload = {
                         id: `chatcmpl-${uuidv4()}`,
@@ -248,6 +249,24 @@ app.post('/v1/chat/completions', async (c) => {
                         data: JSON.stringify(payload)
                     })
                 }
+                // Send final "DONE" message with finish_reason: stop
+                const finalPayload = {
+                    id: `chatcmpl-${uuidv4()}`,
+                    object: 'chat.completion.chunk',
+                    created: Math.floor(Date.now() / 1000),
+                    model: model,
+                    choices: [
+                        {
+                            index: 0,
+                            delta: {},
+                            finish_reason: 'stop'
+                        }
+                    ]
+                }
+                await stream.writeSSE({
+                    data: JSON.stringify(finalPayload)
+                })
+
                 await stream.writeSSE({
                     data: '[DONE]'
                 })
