@@ -45,7 +45,8 @@ app.use('*', async (c, next) => {
 })
 
 // --- Constants ---
-const DEFAULT_MODEL = '@cf/meta/llama-3-8b-instruct'
+const DEFAULT_MODEL = '@cf/meta/llama-3.1-8b-instruct'
+const DEFAULT_EMBEDDING_MODEL = '@cf/baai/bge-large-en-v1.5'
 
 // --- Helpers ---
 // Flattens array content (like from Clawd) to a single string for CF AI
@@ -67,25 +68,34 @@ function resolveModel(inputModel: string | undefined): string {
     if (!inputModel) return DEFAULT_MODEL
     if (inputModel.startsWith('@cf/')) return inputModel // Pass ID through
 
+    // Official Docs Alignment
     if (inputModel.includes('gpt-oss')) return '@cf/openai/gpt-oss-120b'
     if (inputModel.includes('70b')) return '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
-    if (inputModel.includes('llama')) return '@cf/meta/llama-3-8b-instruct'
+    if (inputModel.includes('llama-3.1')) return '@cf/meta/llama-3.1-8b-instruct'
+    if (inputModel.includes('llama-3')) return '@cf/meta/llama-3-8b-instruct'
 
     return DEFAULT_MODEL
 }
 
+function resolveEmbeddingModel(inputModel: string | undefined): string {
+    if (!inputModel) return DEFAULT_EMBEDDING_MODEL
+    if (inputModel.startsWith('@cf/')) return inputModel
+    return DEFAULT_EMBEDDING_MODEL
+}
+
 // --- Routes ---
 
-app.get('/', (c) => c.text('Cloudflare AI Worker Active'))
+app.get('/', (c) => c.text('Cloudflare AI Worker Active (OpenAI Compatible)'))
 
 // 1. OpenAI Compatible Endpoints
 
 app.get('/v1/models', (c) => {
     const models = [
-        { id: '@cf/meta/llama-3-8b-instruct', name: 'Llama 3 8B' },
+        { id: '@cf/meta/llama-3.1-8b-instruct', name: 'Llama 3.1 8B Instruct' },
+        { id: '@cf/meta/llama-3-8b-instruct', name: 'Llama 3 8B Instruct' },
         { id: '@cf/openai/gpt-oss-120b', name: 'GPT OSS 120B' },
-        { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 70B' },
-        { id: 'llama-3-8b-instruct', name: 'Llama 3 (Alias)' }
+        { id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast', name: 'Llama 3.3 70B Instruct' },
+        { id: '@cf/baai/bge-large-en-v1.5', name: 'BGE Large English v1.5 (Embedding)' }
     ]
     return c.json({
         object: 'list',
@@ -105,6 +115,7 @@ app.post('/v1/chat/completions', async (c) => {
         const model = resolveModel(body.model)
         const isStream = body.stream || false
 
+        // Official Docs: run(model, { messages, stream })
         const response = await c.env.AI.run(model, { messages, stream: isStream })
         const created = Math.floor(Date.now() / 1000)
         const id = `chatcmpl-${uuidv4()}`
@@ -156,6 +167,68 @@ app.post('/v1/chat/completions', async (c) => {
                 usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
             })
         }
+    } catch (e: any) {
+        return c.json({ error: e.message }, 500)
+    }
+})
+
+app.post('/v1/embeddings', async (c) => {
+    try {
+        const body = await c.req.json({
+            // Fallback for some clients sending input as 'text' instead of 'input'
+            text: {},
+            input: {}
+        }) as any
+
+        let inputRaw = body.input || body.text
+        const model = resolveEmbeddingModel(body.model)
+
+        // Ensure input is array or string. CF AI expects: { text: string | string[] }
+        // Wait, standard OpenAI is 'input', CF docs say: input: "string" or array.
+        // But CF AI binding .run(model, { text: [...] }) or { text: "..." }
+
+        // Let's normalize input to handling text property for CF AI
+        let inputDerived: string | string[] = ''
+        if (Array.isArray(inputRaw)) {
+            // Check if array of strings or tokens (we only support strings)
+            inputDerived = inputRaw.map(i => String(i))
+        } else {
+            inputDerived = String(inputRaw)
+        }
+
+        const response = await c.env.AI.run(model, { text: inputDerived })
+
+        // Response format from CF AI:
+        // { shape: [...], data: [[...]] } usually
+        // Let's inspect response structure. usually response.data is the array of embeddings.
+
+        const embeddingData = (response as any).data || []
+
+        // If single input string, response.data might be a single array, or array of arrays.
+        // Check depth.
+        let embeddings: number[][] = []
+        if (Array.isArray(embeddingData) && typeof embeddingData[0] === 'number') {
+            embeddings = [embeddingData as number[]]
+        } else {
+            embeddings = embeddingData as number[][]
+        }
+
+        const data = embeddings.map((emb, idx) => ({
+            object: 'embedding',
+            embedding: emb,
+            index: idx
+        }))
+
+        return c.json({
+            object: 'list',
+            data: data,
+            model: model,
+            usage: {
+                prompt_tokens: 0,
+                total_tokens: 0
+            }
+        })
+
     } catch (e: any) {
         return c.json({ error: e.message }, 500)
     }
