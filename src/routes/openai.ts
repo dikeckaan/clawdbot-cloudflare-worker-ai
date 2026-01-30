@@ -47,6 +47,39 @@ openai.post('/v1/chat/completions', async (c) => {
       : { messages }
 
     if (isStream) {
+      // Responses API models don't support CF AI streaming — fetch non-streaming then emit as SSE
+      if (isResponses) {
+        const response = await c.env.AI.run(
+          model as Parameters<typeof c.env.AI.run>[0],
+          payload as Record<string, unknown>
+        )
+        const result = response as Record<string, unknown>
+        const content = extractResponsesContent(result)
+
+        return streamSSE(c, async (stream) => {
+          const chunk: ChatCompletionChunk = {
+            id,
+            object: 'chat.completion.chunk',
+            created,
+            model,
+            choices: [
+              { index: 0, delta: { content }, finish_reason: null },
+            ],
+          }
+          await stream.writeSSE({ data: sseChunkPayload(chunk) })
+          const stopChunk: ChatCompletionChunk = {
+            id,
+            object: 'chat.completion.chunk',
+            created,
+            model,
+            choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          }
+          await stream.writeSSE({ data: sseChunkPayload(stopChunk) })
+          await stream.writeSSE({ data: '[DONE]' })
+        })
+      }
+
+      // Standard chat models — real streaming
       const response = await c.env.AI.run(
         model as Parameters<typeof c.env.AI.run>[0],
         { ...payload, stream: true } as Record<string, unknown>

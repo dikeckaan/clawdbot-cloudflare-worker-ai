@@ -48,6 +48,45 @@ ollama.post('/api/chat', async (c) => {
       : { messages }
 
     if (isStream) {
+      // Responses API models: fetch non-streaming, emit as NDJSON
+      if (isResponses) {
+        const response = await c.env.AI.run(
+          model as Parameters<typeof c.env.AI.run>[0],
+          payload as Record<string, unknown>
+        )
+        const result = response as Record<string, unknown>
+        const content = typeof result.response === 'string'
+          ? result.response
+          : typeof result.output_text === 'string'
+            ? result.output_text
+            : JSON.stringify(result)
+
+        return stream(c, async (s) => {
+          await s.write(
+            ndjsonLine({
+              model,
+              created_at,
+              message: { role: 'assistant', content },
+              done: false,
+            })
+          )
+          await s.write(
+            JSON.stringify({
+              model,
+              created_at,
+              done: true,
+              total_duration: 0,
+              load_duration: 0,
+              prompt_eval_count: 0,
+              prompt_eval_duration: 0,
+              eval_count: 0,
+              eval_duration: 0,
+            }) + '\n'
+          )
+        })
+      }
+
+      // Standard chat models — real streaming
       const response = await c.env.AI.run(
         model as Parameters<typeof c.env.AI.run>[0],
         { ...payload, stream: true } as Record<string, unknown>
