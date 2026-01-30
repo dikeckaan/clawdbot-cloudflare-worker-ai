@@ -23,7 +23,7 @@ export interface ModelEntry {
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
-  content: string | ContentPart[]
+  content: string | ContentPart[] | null
 }
 
 export interface ContentPart {

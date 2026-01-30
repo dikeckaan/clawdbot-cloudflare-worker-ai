@@ -11,16 +11,25 @@ NC='\033[0m'
 PASS=0
 FAIL=0
 VERBOSE=false
+RESET=false
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ENV_FILE="$SCRIPT_DIR/.env"
 
 # Parse flags
-while getopts "v" opt; do
+while getopts "vr" opt; do
   case $opt in
     v) VERBOSE=true ;;
+    r) RESET=true ;;
     *) ;;
   esac
 done
+
+# Reset: delete .env and force re-setup
+if $RESET && [ -f "$ENV_FILE" ]; then
+  rm "$ENV_FILE"
+  echo -e "${YELLOW}.env deleted — starting fresh setup${NC}"
+  echo ""
+fi
 
 # ── .env setup ──
 if [ ! -f "$ENV_FILE" ]; then

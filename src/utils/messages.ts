@@ -7,14 +7,16 @@ import type { ChatMessage } from '../types'
 export function sanitizeMessages(
   messages: ChatMessage[]
 ): { role: string; content: string }[] {
-  return messages.map((msg) => {
-    if (Array.isArray(msg.content)) {
-      const text = msg.content
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text ?? '')
-        .join('\n')
-      return { role: msg.role, content: text }
-    }
-    return { role: msg.role, content: msg.content as string }
-  })
+  return messages
+    .map((msg) => {
+      if (Array.isArray(msg.content)) {
+        const text = msg.content
+          .filter((part) => part.type === 'text')
+          .map((part) => part.text ?? '')
+          .join('\n')
+        return { role: msg.role, content: text }
+      }
+      return { role: msg.role, content: msg.content ?? '' }
+    })
+    .filter((msg) => msg.content.length > 0)
 }
