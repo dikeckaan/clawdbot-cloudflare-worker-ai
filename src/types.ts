@@ -19,6 +19,8 @@ export interface ModelEntry {
   family: string
   /** If true, this model uses the Responses API ({ input }) instead of Chat API ({ messages }) */
   useResponsesApi?: boolean
+  /** Reasoning effort level for Responses API models: 'low', 'medium', 'high' */
+  reasoningEffort?: 'low' | 'medium' | 'high'
 }
 
 // --- OpenAI Types ---

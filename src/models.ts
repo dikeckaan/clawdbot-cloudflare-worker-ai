@@ -71,6 +71,7 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     parameterSize: '120B',
     family: 'gpt',
     useResponsesApi: true,
+    reasoningEffort: 'low', // Minimize reasoning output
   },
 ]
 
@@ -83,6 +84,12 @@ const responsesApiModels = new Set(
 
 export function isResponsesApiModel(cfModelId: string): boolean {
   return responsesApiModels.has(cfModelId)
+}
+
+/** Get reasoning effort for a model (if configured) */
+export function getReasoningEffort(cfModelId: string): 'low' | 'medium' | 'high' | undefined {
+  const model = MODEL_REGISTRY.find((m) => m.cfModelId === cfModelId)
+  return model?.reasoningEffort
 }
 
 const DEFAULT_CF_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8'

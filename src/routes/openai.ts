@@ -8,7 +8,7 @@ import type {
   CfAiEmbeddingResponse,
   EmbeddingsRequest,
 } from '../types'
-import { MODEL_REGISTRY, resolveModel, resolveEmbeddingModel, isResponsesApiModel } from '../models'
+import { MODEL_REGISTRY, resolveModel, resolveEmbeddingModel, isResponsesApiModel, getReasoningEffort } from '../models'
 import { sanitizeMessages, messagesToResponsesApi } from '../utils/messages'
 import { chatCompletionId, unixTimestamp } from '../utils/ids'
 import { openAIError } from '../utils/errors'
@@ -42,9 +42,17 @@ openai.post('/v1/chat/completions', async (c) => {
     const isResponses = isResponsesApiModel(model)
 
     // Build the payload based on model type
-    const payload = isResponses
-      ? messagesToResponsesApi(messages)
-      : { messages }
+    const reasoningEffort = getReasoningEffort(model)
+    let payload: Record<string, unknown>
+    if (isResponses) {
+      payload = messagesToResponsesApi(messages)
+      // Add reasoning effort to minimize reasoning output for gpt-oss-120b
+      if (reasoningEffort) {
+        payload.reasoning = { effort: reasoningEffort }
+      }
+    } else {
+      payload = { messages }
+    }
 
     if (isStream) {
       // Responses API models don't support CF AI streaming — fetch non-streaming then emit as SSE
@@ -120,9 +128,14 @@ openai.post('/v1/chat/completions', async (c) => {
 
     // Responses API returns { output_text } or object with output, Chat API returns { response }
     const result = response as Record<string, unknown>
-    const content = isResponses
-      ? extractResponsesContent(result)
-      : (result as unknown as CfAiChatResponse).response
+    // Try standard Chat API response first, then fall back to Responses API extraction
+    let content: string
+    if (typeof result.response === 'string') {
+      content = result.response
+    } else {
+      // gpt-oss-120b and similar models always return Responses API format
+      content = extractResponsesContent(result)
+    }
 
     return c.json({
       id,
@@ -150,17 +163,48 @@ function extractResponsesContent(result: Record<string, unknown>): string {
   if (typeof result.response === 'string') return result.response
   if (typeof result.output_text === 'string') return result.output_text
 
-  // output array format: { output: [{ type: "message", content: [{ type: "output_text", text }] }] }
+  // output array format from Responses API - prioritize message over reasoning
   if (Array.isArray(result.output)) {
-    const texts: string[] = []
+    const messageTexts: string[] = []
+    const reasoningTexts: string[] = []
+
     for (const item of result.output) {
       const obj = item as Record<string, unknown>
+
+      // Extract message content (preferred)
       if (obj.type === 'message' && Array.isArray(obj.content)) {
         for (const c of obj.content as Record<string, unknown>[]) {
           if (c.type === 'output_text' && typeof c.text === 'string') {
-            texts.push(c.text)
+            messageTexts.push(c.text)
+          }
+          // Also check for text directly in content
+          if (c.type === 'text' && typeof c.text === 'string') {
+            messageTexts.push(c.text)
           }
         }
+      }
+
+      // Extract reasoning content (fallback)
+      if (obj.type === 'reasoning' && Array.isArray(obj.content)) {
+        for (const c of obj.content as Record<string, unknown>[]) {
+          if (c.type === 'reasoning_text' && typeof c.text === 'string') {
+            reasoningTexts.push(c.text)
+          }
+        }
+      }
+    }
+
+    // Prefer message content, fall back to reasoning if no message found
+    if (messageTexts.length > 0) return messageTexts.join('')
+    if (reasoningTexts.length > 0) return reasoningTexts.join('')
+  }
+
+  // Check for output_messages array (another Responses API format)
+  if (Array.isArray(result.output_messages)) {
+    const texts: string[] = []
+    for (const msg of result.output_messages as Record<string, unknown>[]) {
+      if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        texts.push(msg.content)
       }
     }
     if (texts.length > 0) return texts.join('')

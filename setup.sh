@@ -104,6 +104,28 @@ echo -e "${CYAN}Available models ($MODEL_COUNT):${NC}"
 echo "$MODEL_IDS" | nl -w2 -s'. '
 echo ""
 
+# ── Select default model ──
+DEFAULT_MODEL=""
+while true; do
+  echo -e "${CYAN}Select default model (1-$MODEL_COUNT) or press Enter for gpt-oss-120b:${NC}"
+  read -rp "> " MODEL_CHOICE
+  
+  if [ -z "$MODEL_CHOICE" ]; then
+    DEFAULT_MODEL="gpt-oss-120b"
+    break
+  fi
+  
+  if [[ "$MODEL_CHOICE" =~ ^[0-9]+$ ]] && [ "$MODEL_CHOICE" -ge 1 ] && [ "$MODEL_CHOICE" -le "$MODEL_COUNT" ]; then
+    DEFAULT_MODEL=$(echo "$MODEL_IDS" | sed -n "${MODEL_CHOICE}p")
+    break
+  fi
+  
+  echo -e "${RED}Invalid choice. Enter a number between 1 and $MODEL_COUNT.${NC}"
+done
+
+echo -e "${GREEN}Default model: $DEFAULT_MODEL${NC}"
+echo ""
+
 # ── Check openclaw.json ──
 if [ ! -f "$OPENCLAW_CONFIG" ]; then
   echo -e "${RED}openclaw.json not found at $OPENCLAW_CONFIG${NC}"
@@ -113,34 +135,37 @@ fi
 # ── Build provider config and apply ──
 echo -e "${YELLOW}Applying to openclaw.json...${NC}"
 
-python3 - "$OPENCLAW_CONFIG" "$BASE_URL" "$API_TOKEN" "$PROVIDER_NAME" <<'PYEOF'
+python3 - "$OPENCLAW_CONFIG" "$BASE_URL" "$API_TOKEN" "$PROVIDER_NAME" "$DEFAULT_MODEL" <<'PYEOF'
 import sys, json
 
 config_path = sys.argv[1]
 base_url = sys.argv[2]
 api_token = sys.argv[3]
 provider_name = sys.argv[4]
+default_model = sys.argv[5]
 
-# Model definitions: (id, name, reasoning, contextWindow, maxTokens)
+# Model definitions following Ollama provider format
+# (id, name, reasoning, input_types, contextWindow, maxTokens)
 MODELS = [
-    ("llama-3.3-70b",  "Llama 3.3 70B Instruct",       False, 131072, 4096),
-    ("llama-3.1-8b",   "Llama 3.1 8B Instruct",         False, 131072, 4096),
-    ("llama-3-8b",     "Llama 3 8B Instruct",            False, 8192,   4096),
-    ("llama-4-scout",  "Llama 4 Scout 17B",              False, 131072, 4096),
-    ("deepseek-r1",    "DeepSeek R1 Distill Qwen 32B",   True,  131072, 8192),
-    ("qwen2.5-coder",  "Qwen 2.5 Coder 32B",            False, 131072, 8192),
-    ("qwq-32b",        "QwQ 32B",                        True,  131072, 8192),
-    ("mistral-7b",     "Mistral 7B Instruct",            False, 32768,  4096),
-    ("phi-2",          "Phi-2",                           False, 2048,   2048),
-    ("gpt-oss-120b",   "GPT OSS 120B",                   False, 131072, 8192),
+    ("llama-3.3-70b",  "Llama 3.3 70B Instruct",       False, ["text"],         131072, 131072 * 10),
+    ("llama-3.1-8b",   "Llama 3.1 8B Instruct",        False, ["text"],         131072, 131072 * 10),
+    ("llama-3-8b",     "Llama 3 8B Instruct",          False, ["text"],         8192,   8192 * 10),
+    ("llama-4-scout",  "Llama 4 Scout 17B",            False, ["text"],         131072, 131072 * 10),
+    ("deepseek-r1",    "DeepSeek R1 Distill Qwen 32B", True,  ["text"],         131072, 131072 * 10),
+    ("qwen2.5-coder",  "Qwen 2.5 Coder 32B",           False, ["text"],         131072, 131072 * 10),
+    ("qwq-32b",        "QwQ 32B",                      True,  ["text"],         131072, 131072 * 10),
+    ("mistral-7b",     "Mistral 7B Instruct",          False, ["text"],         32768,  32768 * 10),
+    ("phi-2",          "Phi-2",                        False, ["text"],         2048,   2048 * 10),
+    ("gpt-oss-120b",   "GPT OSS 120B",                 False, ["text"],         131072, 131072 * 10),
 ]
 
-DEFAULT_MODEL = "gpt-oss-120b"
+# Cloudflare AI is free (no costs)
+ZERO_COST = {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0}
 
 with open(config_path, "r") as f:
     config = json.load(f)
 
-# Build provider block
+# Build provider block following Ollama format
 provider = {
     "baseUrl": f"{base_url}/v1" if not base_url.endswith("/v1") else base_url,
     "apiKey": api_token,
@@ -148,15 +173,16 @@ provider = {
     "models": []
 }
 
-for mid, name, reasoning, ctx, maxt in MODELS:
+for mid, name, reasoning, input_types, ctx, maxt in MODELS:
     entry = {
         "id": mid,
         "name": name,
+        "reasoning": reasoning,
+        "input": input_types,
+        "cost": ZERO_COST,
         "contextWindow": ctx,
         "maxTokens": maxt,
     }
-    if reasoning:
-        entry["reasoning"] = True
     provider["models"].append(entry)
 
 # Ensure models section exists
@@ -175,7 +201,7 @@ if "defaults" not in config["agents"]:
     config["agents"]["defaults"] = {}
 
 config["agents"]["defaults"]["model"] = {
-    "primary": f"{provider_name}/{DEFAULT_MODEL}"
+    "primary": f"{provider_name}/{default_model}"
 }
 
 # Build models map: keep existing non-provider models, add all provider models
@@ -195,7 +221,7 @@ with open(config_path, "w") as f:
     f.write("\n")
 
 print(f"OK — provider '{provider_name}' with {len(MODELS)} models")
-print(f"OK — default model: {provider_name}/{DEFAULT_MODEL}")
+print(f"OK — default model: {provider_name}/{default_model}")
 PYEOF
 
 echo ""
@@ -208,7 +234,7 @@ echo -e "${CYAN}═════════════════════�
 echo -e "  ${GREEN}Setup complete${NC}"
 echo -e ""
 echo -e "  Provider:  ${BOLD}$PROVIDER_NAME${NC}"
-echo -e "  Default:   ${BOLD}$PROVIDER_NAME/gpt-oss-120b${NC}"
+echo -e "  Default:   ${BOLD}$PROVIDER_NAME/$DEFAULT_MODEL${NC}"
 echo -e "  Models:    ${BOLD}$MODEL_COUNT available${NC}"
 echo -e ""
 echo -e "  Restart OpenClaw to apply changes."
