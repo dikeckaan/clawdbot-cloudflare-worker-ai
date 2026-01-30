@@ -70,8 +70,20 @@ export const MODEL_REGISTRY: ModelEntry[] = [
     displayName: 'GPT OSS 120B',
     parameterSize: '120B',
     family: 'gpt',
+    useResponsesApi: true,
   },
 ]
+
+/**
+ * Models that use the Responses API ({ input }) instead of Chat API ({ messages }).
+ */
+const responsesApiModels = new Set(
+  MODEL_REGISTRY.filter((m) => m.useResponsesApi).map((m) => m.cfModelId)
+)
+
+export function isResponsesApiModel(cfModelId: string): boolean {
+  return responsesApiModels.has(cfModelId)
+}
 
 const DEFAULT_CF_MODEL = '@cf/meta/llama-3.1-8b-instruct-fp8'
 const DEFAULT_EMBEDDING_MODEL = '@cf/baai/bge-large-en-v1.5'

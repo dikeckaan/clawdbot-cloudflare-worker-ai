@@ -17,6 +17,8 @@ export interface ModelEntry {
   displayName: string
   parameterSize: string
   family: string
+  /** If true, this model uses the Responses API ({ input }) instead of Chat API ({ messages }) */
+  useResponsesApi?: boolean
 }
 
 // --- OpenAI Types ---

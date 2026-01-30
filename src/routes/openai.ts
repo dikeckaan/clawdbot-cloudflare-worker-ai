@@ -8,8 +8,8 @@ import type {
   CfAiEmbeddingResponse,
   EmbeddingsRequest,
 } from '../types'
-import { MODEL_REGISTRY, resolveModel, resolveEmbeddingModel } from '../models'
-import { sanitizeMessages } from '../utils/messages'
+import { MODEL_REGISTRY, resolveModel, resolveEmbeddingModel, isResponsesApiModel } from '../models'
+import { sanitizeMessages, messagesToResponsesApi } from '../utils/messages'
 import { chatCompletionId, unixTimestamp } from '../utils/ids'
 import { openAIError } from '../utils/errors'
 import { parseAiStream, sseChunkPayload } from '../utils/streaming'
@@ -39,11 +39,17 @@ openai.post('/v1/chat/completions', async (c) => {
     const isStream = body.stream ?? false
     const id = chatCompletionId()
     const created = unixTimestamp()
+    const isResponses = isResponsesApiModel(model)
+
+    // Build the payload based on model type
+    const payload = isResponses
+      ? messagesToResponsesApi(messages)
+      : { messages }
 
     if (isStream) {
       const response = await c.env.AI.run(
         model as Parameters<typeof c.env.AI.run>[0],
-        { messages, stream: true }
+        { ...payload, stream: true } as Record<string, unknown>
       )
 
       return streamSSE(c, async (stream) => {
@@ -74,10 +80,16 @@ openai.post('/v1/chat/completions', async (c) => {
     }
 
     // Non-streaming
-    const response = (await c.env.AI.run(
+    const response = await c.env.AI.run(
       model as Parameters<typeof c.env.AI.run>[0],
-      { messages }
-    )) as CfAiChatResponse
+      payload as Record<string, unknown>
+    )
+
+    // Responses API returns { output_text } or object with output, Chat API returns { response }
+    const result = response as Record<string, unknown>
+    const content = isResponses
+      ? extractResponsesContent(result)
+      : (result as unknown as CfAiChatResponse).response
 
     return c.json({
       id,
@@ -87,7 +99,7 @@ openai.post('/v1/chat/completions', async (c) => {
       choices: [
         {
           index: 0,
-          message: { role: 'assistant', content: response.response },
+          message: { role: 'assistant', content: content ?? '' },
           finish_reason: 'stop',
         },
       ],
@@ -98,6 +110,32 @@ openai.post('/v1/chat/completions', async (c) => {
     return c.json(openAIError(msg), 500)
   }
 })
+
+/** Extract text content from Responses API result (gpt-oss-120b) */
+function extractResponsesContent(result: Record<string, unknown>): string {
+  // Try common response shapes from CF Workers AI Responses API
+  if (typeof result.response === 'string') return result.response
+  if (typeof result.output_text === 'string') return result.output_text
+
+  // output array format: { output: [{ type: "message", content: [{ type: "output_text", text }] }] }
+  if (Array.isArray(result.output)) {
+    const texts: string[] = []
+    for (const item of result.output) {
+      const obj = item as Record<string, unknown>
+      if (obj.type === 'message' && Array.isArray(obj.content)) {
+        for (const c of obj.content as Record<string, unknown>[]) {
+          if (c.type === 'output_text' && typeof c.text === 'string') {
+            texts.push(c.text)
+          }
+        }
+      }
+    }
+    if (texts.length > 0) return texts.join('')
+  }
+
+  // Fallback: stringify whatever we got
+  return JSON.stringify(result)
+}
 
 // --- POST /v1/embeddings ---
 openai.post('/v1/embeddings', async (c) => {

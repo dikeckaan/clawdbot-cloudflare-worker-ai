@@ -5,8 +5,8 @@ import type {
   OllamaChatRequest,
   CfAiChatResponse,
 } from '../types'
-import { MODEL_REGISTRY, resolveModel } from '../models'
-import { sanitizeMessages } from '../utils/messages'
+import { MODEL_REGISTRY, resolveModel, isResponsesApiModel } from '../models'
+import { sanitizeMessages, messagesToResponsesApi } from '../utils/messages'
 import { isoTimestamp } from '../utils/ids'
 import { ollamaError } from '../utils/errors'
 import { parseAiStream, ndjsonLine } from '../utils/streaming'
@@ -41,11 +41,16 @@ ollama.post('/api/chat', async (c) => {
     const model = resolveModel(body.model)
     const isStream = body.stream ?? true // Ollama defaults to streaming
     const created_at = isoTimestamp()
+    const isResponses = isResponsesApiModel(model)
+
+    const payload = isResponses
+      ? messagesToResponsesApi(messages)
+      : { messages }
 
     if (isStream) {
       const response = await c.env.AI.run(
         model as Parameters<typeof c.env.AI.run>[0],
-        { messages, stream: true }
+        { ...payload, stream: true } as Record<string, unknown>
       )
 
       return stream(c, async (s) => {
@@ -78,15 +83,27 @@ ollama.post('/api/chat', async (c) => {
     }
 
     // Non-streaming
-    const response = (await c.env.AI.run(
+    const response = await c.env.AI.run(
       model as Parameters<typeof c.env.AI.run>[0],
-      { messages }
-    )) as CfAiChatResponse
+      payload as Record<string, unknown>
+    )
+
+    const result = response as Record<string, unknown>
+    let content: string
+    if (isResponses) {
+      content = typeof result.response === 'string'
+        ? result.response
+        : typeof result.output_text === 'string'
+          ? result.output_text
+          : JSON.stringify(result)
+    } else {
+      content = (result as unknown as CfAiChatResponse).response
+    }
 
     return c.json({
       model,
       created_at,
-      message: { role: 'assistant', content: response.response },
+      message: { role: 'assistant', content },
       done: true,
       total_duration: 0,
       load_duration: 0,
