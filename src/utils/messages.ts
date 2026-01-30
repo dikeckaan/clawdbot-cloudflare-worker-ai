@@ -50,3 +50,51 @@ export function messagesToResponsesApi(
   }
   return result
 }
+
+/**
+ * Extract text content from Responses API result (gpt-oss-120b).
+ * Only returns the message content, reasoning is ignored.
+ */
+export function extractResponsesContent(result: Record<string, unknown>): string {
+  // Try common response shapes from CF Workers AI Responses API
+  if (typeof result.response === 'string') return result.response
+  if (typeof result.output_text === 'string') return result.output_text
+
+  // output array format from Responses API - only extract message, ignore reasoning
+  if (Array.isArray(result.output)) {
+    const messageTexts: string[] = []
+
+    for (const item of result.output) {
+      const obj = item as Record<string, unknown>
+
+      // Extract message content only (ignore reasoning)
+      if (obj.type === 'message' && Array.isArray(obj.content)) {
+        for (const c of obj.content as Record<string, unknown>[]) {
+          if (c.type === 'output_text' && typeof c.text === 'string') {
+            messageTexts.push(c.text)
+          }
+          // Also check for text directly in content
+          if (c.type === 'text' && typeof c.text === 'string') {
+            messageTexts.push(c.text)
+          }
+        }
+      }
+    }
+
+    if (messageTexts.length > 0) return messageTexts.join('')
+  }
+
+  // Check for output_messages array (another Responses API format)
+  if (Array.isArray(result.output_messages)) {
+    const texts: string[] = []
+    for (const msg of result.output_messages as Record<string, unknown>[]) {
+      if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        texts.push(msg.content)
+      }
+    }
+    if (texts.length > 0) return texts.join('')
+  }
+
+  // Fallback: stringify whatever we got
+  return JSON.stringify(result)
+}

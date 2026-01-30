@@ -5,8 +5,8 @@ import type {
   OllamaChatRequest,
   CfAiChatResponse,
 } from '../types'
-import { MODEL_REGISTRY, resolveModel, isResponsesApiModel } from '../models'
-import { sanitizeMessages, messagesToResponsesApi } from '../utils/messages'
+import { MODEL_REGISTRY, resolveModel, isResponsesApiModel, getReasoningEffort } from '../models'
+import { sanitizeMessages, messagesToResponsesApi, extractResponsesContent } from '../utils/messages'
 import { isoTimestamp } from '../utils/ids'
 import { ollamaError } from '../utils/errors'
 import { parseAiStream, ndjsonLine } from '../utils/streaming'
@@ -50,16 +50,16 @@ ollama.post('/api/chat', async (c) => {
     if (isStream) {
       // Responses API models: fetch non-streaming, emit as NDJSON
       if (isResponses) {
+        const reasoningEffort = getReasoningEffort(model)
+        const responsesPayload = reasoningEffort
+          ? { ...payload, reasoning: { effort: reasoningEffort } }
+          : payload
         const response = await c.env.AI.run(
           model as Parameters<typeof c.env.AI.run>[0],
-          payload as Record<string, unknown>
+          responsesPayload as Record<string, unknown>
         )
         const result = response as Record<string, unknown>
-        const content = typeof result.response === 'string'
-          ? result.response
-          : typeof result.output_text === 'string'
-            ? result.output_text
-            : JSON.stringify(result)
+        const content = extractResponsesContent(result)
 
         return stream(c, async (s) => {
           await s.write(
@@ -130,11 +130,7 @@ ollama.post('/api/chat', async (c) => {
     const result = response as Record<string, unknown>
     let content: string
     if (isResponses) {
-      content = typeof result.response === 'string'
-        ? result.response
-        : typeof result.output_text === 'string'
-          ? result.output_text
-          : JSON.stringify(result)
+      content = extractResponsesContent(result)
     } else {
       content = (result as unknown as CfAiChatResponse).response
     }
